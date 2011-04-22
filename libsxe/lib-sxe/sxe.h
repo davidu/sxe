@@ -37,6 +37,7 @@
 #define SXE_FLAG_IS_ONESHOT       0x00000002
 #define SXE_FLAG_IS_CALLER_READS  0x00000004
 #define SXE_FLAG_IS_PAUSED        0x00000008
+#define SXE_FLAG_IS_SSL           0x00000010
 
 typedef enum SXE_BUF_RESUME {
     SXE_BUF_RESUME_IMMEDIATE,
@@ -60,9 +61,10 @@ typedef struct SXE {
     unsigned               id_next;              /* to keep free list                                                     */
     unsigned               id;
     unsigned               flags;
+    unsigned               ssl_id;               /* SXE_POOL_NO_INDEX unless using SSL                                    */
     SXE_SOCKET             socket;               /* is handle on Windows, is fd on Linux                                  */
     int                    socket_as_fd;         /* is fd     on Windows, is fd on Linux                                  */
-    int                    last_write;           /* number of bytes writen by the last sxe_write() call                   */
+    int                    last_write;           /* number of bytes written by the last sxe_write() call                  */
     unsigned               in_total;
     unsigned               in_consumed;          /* number of bytes already "consumed" by the callback                    */
     char                   in_buf[SXE_BUF_SIZE];
