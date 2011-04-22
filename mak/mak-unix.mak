@@ -83,7 +83,7 @@ LINK               = gcc
 LINK_OUT           = -o $(EMPTY)
 LINK_FLAGS        += -ldl
 # -lm needed by ev; ceil()
-LINK_FLAGS        += -g -lm
+LINK_FLAGS        += -g -lm -lssl -lcrypto
 LIB_CMD            = $(MAKE_PERL_LIB)
 LIB_OUT            =
 LIB_FLAGS          =
