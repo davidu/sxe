@@ -1346,7 +1346,6 @@ sxe_write(SXE * this, const void * buf, unsigned size)
         *((const char *)buf + 3),
         size,
         this->socket);
-    SXED90I(buf, size);
 
     if (this->socket == SXE_SOCKET_INVALID) {
         SXEL20I("Send on a disconnected socket");
@@ -1367,6 +1366,7 @@ sxe_write(SXE * this, const void * buf, unsigned size)
      */
     if ((ret = send(this->socket, buf, size, SXE_SOCKET_MSG_NOSIGNAL)) != (int)size) {
         if (ret >= 0) {
+            SXED90I(buf, ret);
             SXEL83I("sxe_write(): Only %d of %u bytes written to socket=%d", ret, size, this->socket);
             this->last_write = ret;
             result = SXE_RETURN_WARN_WOULD_BLOCK; /* Coverage Exclusion - todo: win32 coverage */
