@@ -129,12 +129,10 @@ tc_chat_from_server(SXE * client, SXE * server, const char *buffer, size_t bufle
 int
 main(int argc, char *argv[])
 {
-    char           buffer[4096];
     tap_ev         event;
     SXE          * listener = NULL;
     SXE          * server   = NULL;
     SXE          * client   = NULL;
-    SXE_RETURN     result;
 
     SXE_UNUSED_PARAMETER(argc);
 
