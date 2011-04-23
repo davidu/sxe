@@ -26,6 +26,7 @@
 #include "mock.h"
 #include "sxe.h"
 #include "sxe-log.h"
+#include "sxe-mmap.h"
 #include "sxe-socket.h"
 #include "sxe-test.h"
 #include "sxe-util.h"
@@ -49,9 +50,14 @@ test_event_connected(SXE * this)
 static void
 test_event_read(SXE * this, int length)
 {
+    SXE_UNUSED_PARAMETER(length);
     tap_ev_queue q = SXE_USER_DATA(this);
     SXEE61I("test_event_read(length=%d)", length);
-    tap_ev_queue_push(q, __func__, 2, "this", this, "length", length);
+    tap_ev_queue_push(q, __func__, 3,
+                      "this", this,
+                      "buf", tap_dup(SXE_BUF(this), SXE_BUF_USED(this)),
+                      "used", SXE_BUF_USED(this));
+    sxe_buf_clear(this);
     SXER60I("return");
 }
 
@@ -60,7 +66,7 @@ test_event_sent(SXE * this, SXE_RETURN final)
 {
     tap_ev_queue q = SXE_USER_DATA(this);
     SXEE60I("test_event_sent()");
-    tap_ev_queue_push(q, __func__, 1, "this", this);
+    tap_ev_queue_push(q, __func__, 2, "this", this, "result", final);
     SXER60I("return");
 }
 
@@ -74,20 +80,22 @@ test_event_close(SXE * this)
 }
 
 int
-main(void)
+main(int argc, char *argv[])
 {
     char           buffer[4096];
     tap_ev         event;
-    unsigned       i;
     SXE          * listener = NULL;
     SXE          * server   = NULL;
     SXE          * client   = NULL;
     SXE_RETURN     result;
 
+    SXE_UNUSED_PARAMETER(argc);
+
     q_server = tap_ev_queue_new();
     q_client = tap_ev_queue_new();
 
-    plan_tests(20);
+    plan_tests(37);
+
     sxe_register(6, 0);
     sxe_ssl_register(2);
     is(sxe_init(), SXE_RETURN_OK,                                                           "sxe_init succeeded");
@@ -124,22 +132,39 @@ main(void)
         server = SXE_CAST(SXE *, tap_ev_arg(event, "this"));
     }
 
+    /* Try to allocate another SSL connection; this will fail because we only
+     * registered 2, and both are in use. */
+    {
+        SXE * extra = sxe_new_tcp(NULL, "0.0.0.0", 0, test_event_connected, test_event_read, test_event_close);
+        sxe_listen(extra);
+        is(sxe_ssl_accept(extra), SXE_RETURN_NO_UNUSED_ELEMENTS,                            "got SXE_RETURN_NO_UNUSED_ELEMENTS");
+        is(sxe_ssl_connect(extra), SXE_RETURN_NO_UNUSED_ELEMENTS,                           "got SXE_RETURN_NO_UNUSED_ELEMENTS");
+        sxe_close(extra);
+    }
+
+    /* Try to use sxe_write() and sxe_sendfile() to prove that both refuse to
+     * cooperate with SSL sockets. */
+    {
+        off_t offset;
+
+        is(sxe_write(client, "Hello?", 6), SXE_RETURN_ERROR_WRITE_FAILED,                         "sxe_write() failed on SSL socket");
+        is(sxe_sendfile(client, -1, &offset, 1, test_event_sent), SXE_RETURN_ERROR_WRITE_FAILED,  "sxe_sendfile() failed on SSL socket");
+    }
+
     /* client -> server: "HELO" */
     {
         result = sxe_send(client, "HELO", 4, test_event_sent);
         if (result == SXE_RETURN_IN_PROGRESS) {
             event = test_tap_ev_queue_shift_wait(q_client, 2);
             is_eq(tap_ev_identifier(event), "test_event_sent",                              "got client sent event");
+            is_eq(SXE_CAST(SXE_RETURN, tap_ev_arg(event, "result")), SXE_RETURN_OK,         "got successful send");
         }
         else {
-            skip(1, "client sent immediately - no need to wait for sent event");
+            skip(2, "client sent immediately - no need to wait for sent event");
         }
 
-        event = test_tap_ev_queue_shift_wait(q_server, 2);
-        is_eq(tap_ev_identifier(event), "test_event_read",                                  "got server read event");
-        is(SXE_CAST(int, tap_ev_arg(event, "length")), 4,                                   "read a four byte value");
-        is(SXE_BUF_USED(server),     4,                                                     "four bytes in buffer");
-        is_strncmp(SXE_BUF(server), "HELO", 4,                                              "'HELO' in buffer");
+        test_ev_queue_wait_read(q_server, 2, &event, server, "test_event_read", buffer, 4, "server");
+        is_strncmp(buffer, "HELO", 4,                                                       "server read 'HELO' from client");
     }
 
     /* server -> client: "HITHERE" */
@@ -148,17 +173,92 @@ main(void)
         if (result == SXE_RETURN_IN_PROGRESS) {
             event = test_tap_ev_queue_shift_wait(q_server, 2);
             is_eq(tap_ev_identifier(event), "test_event_sent",                              "got server sent event");
+            is_eq(SXE_CAST(SXE_RETURN, tap_ev_arg(event, "result")), SXE_RETURN_OK,         "got successful send");
         }
         else {
-            skip(1, "server sent immediately - no need to wait for sent event");
+            skip(2, "server sent immediately - no need to wait for sent event");
         }
 
+        test_ev_queue_wait_read(q_client, 2, &event, client, "test_event_read", buffer, 7, "client");
+        is_strncmp(buffer, "HITHERE", 7,                                                    "client read 'HITHERE' from server");
+    }
+
+    /* client -> server: something bigger than a single read, but only a
+     * single write (16KB) */
+    {
+#define S25 "abcdefghijklmnopqrstuvwxy"
+#define S10 "0987654321"
+#define S5  "~!@#$"
+#define S100 S25 S10 S5 S25 S10 S25
+#define S1000 S100 S100 S100 S100 S100 S100 S100 S100 S100 S100
+#define S4000 S1000 S1000 S1000 S1000
+        char sendbuf[] = S4000;
+
+        result = sxe_send(client, sendbuf, sizeof sendbuf, test_event_sent);
+        if (result == SXE_RETURN_IN_PROGRESS) {
+            event = test_tap_ev_queue_shift_wait(q_client, 2);
+            is_eq(tap_ev_identifier(event), "test_event_sent",                              "got client sent event");
+            is_eq(SXE_CAST(SXE_RETURN, tap_ev_arg(event, "result")), SXE_RETURN_OK,         "got successful send");
+        }
+        else {
+            skip(2, "client sent immediately - no need to wait for sent event");
+        }
+
+        test_ev_queue_wait_read(q_server, 2, &event, server, "test_event_read", buffer, sizeof sendbuf, "server");
+        is_strncmp(buffer, sendbuf, sizeof sendbuf,                                         "server read correct content from client");
+    }
+
+    /* server -> client: "HITHERE" */
+    {
+        result = sxe_send(server, "THANKS!", 7, test_event_sent);
+        if (result == SXE_RETURN_IN_PROGRESS) {
+            event = test_tap_ev_queue_shift_wait(q_server, 2);
+            is_eq(tap_ev_identifier(event), "test_event_sent",                              "got server sent event");
+            is_eq(SXE_CAST(SXE_RETURN, tap_ev_arg(event, "result")), SXE_RETURN_OK,         "got successful send");
+        }
+        else {
+            skip(2, "server sent immediately - no need to wait for sent event");
+        }
+
+        test_ev_queue_wait_read(q_client, 2, &event, client, "test_event_read", buffer, 7, "client");
+        is_strncmp(buffer, "THANKS!", 7,                                                    "client read 'THANKS!' from server");
+    }
+
+    /* client -> server: contents of compiled argv[0]. */
+    {
+        char *readbuf;
+        SXE_MMAP self;
+
+        sxe_mmap_open(&self, argv[0]);
+        SXEA11((readbuf = calloc(1, self.size)) != NULL,                                    "Failed to allocate %u bytes", self.size);
+
+        result = sxe_send(client, self.addr, self.size, test_event_sent);
+        is(result, SXE_RETURN_IN_PROGRESS,                                                  "got client send IN_PROGRESS");
+
+        test_ev_queue_wait_read(q_server, 10, &event, server, "test_event_read", readbuf, self.size, "server");
+        is(memcmp(readbuf, self.addr, self.size), 0,                                        "got correct contents of %s", argv[0]);
+
         event = test_tap_ev_queue_shift_wait(q_client, 2);
-        is_eq(tap_ev_identifier(event), "test_event_read",                                  "got client read event");
-        is(tap_ev_arg(event, "this"), client,                                               "on the client");
-        is(SXE_CAST(int, tap_ev_arg(event, "length")), 7,                                   "read a 7 byte value");
-        is(SXE_BUF_USED(client),     7,                                                     "seven bytes in buffer");
-        is_eq(SXE_BUF(client), "HITHERE",                                                   "'HITHERE' in client buffer");
+        is_eq(tap_ev_identifier(event), "test_event_sent",                                  "got client sent event");
+
+        free(readbuf);
+        sxe_mmap_close(&self);
+    }
+
+    /* Reply with something short from the server */
+    {
+        result = sxe_send(server, "THANKS!", 7, test_event_sent);
+        if (result == SXE_RETURN_IN_PROGRESS) {
+            event = test_tap_ev_queue_shift_wait(q_server, 2);
+            is_eq(tap_ev_identifier(event), "test_event_sent",                              "got server sent event");
+            is_eq(SXE_CAST(SXE_RETURN, tap_ev_arg(event, "result")), SXE_RETURN_OK,         "got successful send");
+        }
+        else {
+            skip(2, "server sent immediately - no need to wait for sent event");
+        }
+
+        test_ev_queue_wait_read(q_client, 2, &event, client, "test_event_read", buffer, 7, "client");
+        is_strncmp(buffer, "THANKS!", 7,                                                    "client read 'THANKS!' from server");
     }
 
     /* Close the client, and ensure the server gets a close event. Note that

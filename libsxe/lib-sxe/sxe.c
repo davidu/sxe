@@ -1416,7 +1416,7 @@ sxe_io_cb_send(EV_P_ ev_io * io, int revents) /* Coverage Exclusion - todo: win3
     }
 
     if (result != SXE_RETURN_OK) {  /* Coverage Exclusion - todo: win32 coverage */
-        if (result == SXE_RETURN_WARN_WOULD_BLOCK) {
+        if (result == SXE_RETURN_WARN_WOULD_BLOCK) { /* Coverage Exclusion: todo: win32 coverage */
            SXEL82("Partial write, written %u bytes of %u", this->send_buf_written, this->send_buf_len);
            goto SXE_EARLY_OUT; /* Coverage Exclusion - todo: win32 coverage */
         }
@@ -1425,14 +1425,14 @@ sxe_io_cb_send(EV_P_ ev_io * io, int revents) /* Coverage Exclusion - todo: win3
     SXEA10(this->send_buf_written == this->send_buf_len, "if sxe_write returns SXE_RETURN_OK then all data should be writen"); /* Coverage Exclusion - todo: win32 coverage */
 
     SXEL80I("Re-enabling read events on this SXE");
-    sxe_watch_read(this);
+    sxe_watch_read(this); /* Coverage Exclusion - todo: win32 coverage */
 
     if (this->out_event_written) { /* Coverage Exclusion - todo: win32 coverage */
         (*this->out_event_written)(this, result);
         this->out_event_written = NULL;
     }
 
-SXE_EARLY_OUT:
+SXE_EARLY_OUT: /* Coverage Exclusion - todo: win32 coverage */
     SXER80I("return");
 } /* Coverage Exclusion - todo: win32 coverage */
 
@@ -1623,11 +1623,11 @@ sxe_watch_read(SXE * this)
 
 void
 sxe_watch_write(SXE * this)
-{
-    SXEE80I("sxe_watch_write()");
-    sxe_watch_events(this, sxe_io_cb_send, EV_WRITE, 1);
-    SXER80I("return");
-}
+{                                                           /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
+    SXEE80I("sxe_watch_write()");                           /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
+    sxe_watch_events(this, sxe_io_cb_send, EV_WRITE, 1);    /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
+    SXER80I("return");                                      /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
+}                                                           /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
 
 /* TODO: Make useful or delete
  */

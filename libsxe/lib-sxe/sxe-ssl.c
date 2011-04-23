@@ -40,16 +40,16 @@ static void sxe_ssl_io_cb_read(EV_P_ ev_io *io, int revents);
 
 static const char *
 sxe_ssl_state_to_string(SXE_SSL_STATE state)
-{
-    switch (state) {
-    case SXE_SSL_S_FREE        : return "FREE";
-    case SXE_SSL_S_CONNECTED   : return "CONNECTED";
-    case SXE_SSL_S_ESTABLISHED : return "ESTABLISHED";
-    case SXE_SSL_S_READING     : return "READING";
-    case SXE_SSL_S_WRITING     : return "WRITING";
-    default:                     return NULL;
-    }
-}
+{                                                           /* Coverage exclusion: state-to-string */
+    switch (state) {                                        /* Coverage exclusion: state-to-string */
+        case SXE_SSL_S_FREE        : return "FREE";         /* Coverage exclusion: state-to-string */
+        case SXE_SSL_S_CONNECTED   : return "CONNECTED";    /* Coverage exclusion: state-to-string */
+        case SXE_SSL_S_ESTABLISHED : return "ESTABLISHED";  /* Coverage exclusion: state-to-string */
+        case SXE_SSL_S_READING     : return "READING";      /* Coverage exclusion: state-to-string */
+        case SXE_SSL_S_WRITING     : return "WRITING";      /* Coverage exclusion: state-to-string */
+        default:                     return NULL;           /* Coverage exclusion: state-to-string */
+    }                                                       /* Coverage exclusion: state-to-string */
+}                                                           /* Coverage exclusion: state-to-string */
 
 void
 sxe_ssl_register(unsigned number_of_connections)
@@ -80,6 +80,10 @@ sxe_ssl_init(const char *cert_path, const char *key_path, const char *CAfile, co
     SXEA11(SSL_CTX_set_cipher_list(sxe_ssl_ctx, "HIGH;MEDIUM;!LOW;!EXPORT;!eNULL;!aNULL;!SSLv2") == 1,
             "Failed to set SSL context's cipher list: %u", ERR_get_error());
 
+    /* Allow SSL_write() to return non-negative numbers after writing a single
+     * SSL record. */
+    SSL_CTX_set_mode(sxe_ssl_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
+
     SXEA11(SSL_CTX_use_certificate_file(sxe_ssl_ctx, cert_path, SSL_FILETYPE_PEM) == 1,
             "Failed to set SSL context's certificate file: %u", ERR_get_error());
     SXEA11(SSL_CTX_use_PrivateKey_file(sxe_ssl_ctx, key_path, SSL_FILETYPE_PEM) == 1,
@@ -90,11 +94,10 @@ sxe_ssl_init(const char *cert_path, const char *key_path, const char *CAfile, co
     /* Server mode: the server will not send a client certificate request to
      * the client, so the client will not send a certificate.
      *
-     * Client mode: if not using an anonymous cipher (by default disabled),
-     * the server will send a certificate which will be checked. The result of
-     * the certificate verification process can be checked after the TLS/SSL
-     * handshake using the SSL_get_verify_result(3) function.  The handshake
-     * will be continued regardless of the verification result.
+     * Client mode: the server will send a certificate which will be checked.
+     * The result of the certificate verification process can be checked after
+     * the TLS/SSL handshake using the SSL_get_verify_result(3) function.  The
+     * handshake will be continued regardless of the verification result.
      */
     SSL_CTX_set_verify(sxe_ssl_ctx, SSL_VERIFY_NONE, NULL);
 
@@ -128,6 +131,7 @@ setup_sxe_for_ssl(SXE * this)
 
     if ((id = sxe_pool_set_oldest_element_state(sxe_ssl_array, SXE_SSL_S_FREE, SXE_SSL_S_CONNECTED)) == SXE_POOL_NO_INDEX) {
         SXEL30I("ssl_setup: Warning: ran out of SSL connections; SSL concurrency too high");
+        result = SXE_RETURN_NO_UNUSED_ELEMENTS;
         goto SXE_EARLY_OUT;
     }
 
@@ -161,13 +165,82 @@ handle_ssl_error_close(SXE * this, SXE_SSL_STATE state)
 }
 
 static SXE_RETURN
+handle_ssl_io_error(SXE * this, SXE_SSL *ssl, int ret,
+                    SXE_SSL_STATE state, SXE_SSL_STATE read_state, SXE_SSL_STATE write_state,
+                    const char *func, const char *op)
+{
+    SXE_RETURN   result = SXE_RETURN_ERROR_INTERNAL;
+    char         errstr[1024];
+
+    switch (SSL_get_error(ssl->conn, ret)) {
+    case SSL_ERROR_WANT_READ:
+        SXEL82I("%s(): %s() wants to read!", func, op);
+        if (state != read_state) {
+            sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, read_state);     /* Coverage exclusion: todo - get SSL_write() to return SSL_ERROR_WANT_READ */
+        }
+        sxe_watch_events(this, sxe_ssl_io_cb_read, EV_READ, 1);
+        result = SXE_RETURN_IN_PROGRESS;
+        break;
+
+    case SSL_ERROR_WANT_WRITE:
+        SXEL82I("%s(): %s() wants to write!", func, op);                                            /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
+        if (state != write_state) {                                                                 /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
+            sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, write_state);    /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
+        }                                                                                           /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
+        sxe_watch_events(this, sxe_ssl_io_cb_write, EV_WRITE, 1);                                   /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
+        result = SXE_RETURN_IN_PROGRESS;                                                            /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
+        break;                                                                                      /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
+
+    case SSL_ERROR_ZERO_RETURN:
+        /* The SSL transport has been closed cleanly. This does not
+         * necessarily mean the underlying transport has been closed. Need to
+         * do an sxe_close() here. */
+        SXEL31I("%s(): SSL zero return: closing connection", func);
+        handle_ssl_error_close(this, state);
+        result = SXE_RETURN_END_OF_FILE;
+        break;
+
+    case SSL_ERROR_SSL:
+        SXEL33I("%s(): %s() error: %u", func, op, ERR_error_string(ERR_get_error(), errstr));       /* Coverage exclusion: todo - get SSL function to return SSL_ERROR_SSL */
+        handle_ssl_error_close(this, state);                                                        /* Coverage exclusion: todo - get SSL function to return SSL_ERROR_SSL */
+        break;                                                                                      /* Coverage exclusion: todo - get SSL function to return SSL_ERROR_SSL */
+
+    case SSL_ERROR_SYSCALL:
+        {                                                                                           /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+            long err = ERR_get_error();                                                             /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+            if (err == 0) {                                                                         /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+                if (ret == 0) {                                                                     /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+                    SXEL31I("%s(): SSL received illegal EOF", func);                                /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+                }                                                                                   /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+                else {                                                                              /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+                    SXEL33I("%s(): SSL system call error: %s (%d)", func, strerror(errno), errno);  /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+                }                                                                                   /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+            }                                                                                       /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+            else {                                                                                  /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+                SXEL33I("%s(): %s(): SSL error %s", func, op, ERR_error_string(err, errstr));       /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+            }                                                                                       /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+
+            handle_ssl_error_close(this, state);                                                    /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+            result = SXE_RETURN_ERROR_WRITE_FAILED;                                                 /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+        }                                                                                           /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+        break;                                                                                      /* Coverage exclusion: todo - get SSL functions to fail in system calls */
+
+    default:
+        SXEL32I("%s(): %s(): returned unknown SSL error", func, op);                                /* Coverage exclusion: todo - get SSL functions to fail in other ways */
+        handle_ssl_error_close(this, state);                                                        /* Coverage exclusion: todo - get SSL functions to fail in other ways */
+        break;                                                                                      /* Coverage exclusion: todo - get SSL functions to fail in other ways */
+    }
+
+    return result;
+}
+
+static SXE_RETURN
 do_ssl_handshake(SXE * this)
 {
     SXE_RETURN   result = SXE_RETURN_ERROR_INTERNAL;
     SXE_SSL    * ssl;
     int          ret;
     unsigned     state;
-    char         errstr[1024];
 
     SXEE80I("do_ssl_handshake()");
 
@@ -216,44 +289,7 @@ do_ssl_handshake(SXE * this)
         goto SXE_EARLY_OUT;
     }
 
-    switch (SSL_get_error(ssl->conn, ret)) {
-    case SSL_ERROR_WANT_READ:
-        SXEL80I("SSL_get_error(): SSL_do_handshake() wants to read!");
-        sxe_watch_events(this, sxe_ssl_io_cb_read, EV_READ, 1);
-        result = SXE_RETURN_WARN_WOULD_BLOCK;
-        break;
-
-    case SSL_ERROR_WANT_WRITE:
-        SXEL80I("SSL_get_error(): SSL_do_handshake() wants to write!");
-        sxe_watch_events(this, sxe_ssl_io_cb_write, EV_WRITE, 1);
-        result = SXE_RETURN_WARN_WOULD_BLOCK;
-        break;
-
-    case SSL_ERROR_SSL:
-        SXEL31I("SSL error: %u", ERR_error_string(ERR_get_error(), errstr));
-        handle_ssl_error_close(this, state);
-        break;
-    case SSL_ERROR_SYSCALL:
-        if (ret == 0) {
-            SXEL31I("SSL received illegal EOF: %u", ERR_error_string(ERR_get_error(), errstr));
-        }
-        else {
-            SXEL32I("SSL system call error: %s (%d)", strerror(errno), errno);
-        }
-        handle_ssl_error_close(this, state);
-        break;
-    case SSL_ERROR_ZERO_RETURN:
-        /* The SSL transport has been closed cleanly. This does not
-         * necessarily mean the underlying transport has been closed. Need to
-         * do an sxe_close() here. */
-        SXEL30I("SSL zero return");
-        handle_ssl_error_close(this, state);
-        break;
-    default:
-        SXEL30I("Different SSL error");
-        handle_ssl_error_close(this, state);
-        break;
-    }
+    result = handle_ssl_io_error(this, ssl, ret, state, state, state, "do_ssl_handshake", "SSL_do_handshake");
 
 SXE_EARLY_OUT:
     SXER82I("return %d // %s", result, sxe_return_to_string(result));
@@ -307,7 +343,6 @@ sxe_ssl_close(SXE * this)
     SXE_SSL     * ssl;
     SXE_SSL_STATE state;
     int           ret;
-    char          errstr[1024];
     SXEE80I("sxe_ssl_close()");
 
     SXEA10I(this->ssl_id != SXE_POOL_NO_INDEX, "sxe_ssl_close() called on non-SSL SXE");
@@ -327,46 +362,7 @@ sxe_ssl_close(SXE * this)
         goto SXE_EARLY_OUT;
     }
 
-    switch (SSL_get_error(ssl->conn, ret)) {
-    case SSL_ERROR_WANT_READ:
-        SXEL80I("sxe_ssl_send(): SSL_write() wants to read");
-        sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_CLOSING);
-        sxe_watch_events(this, sxe_ssl_io_cb_read, EV_READ, 1);
-        result = SXE_RETURN_IN_PROGRESS;
-        break;
-
-    case SSL_ERROR_WANT_WRITE:
-        SXEL80I("sxe_ssl_send(): SSL_write() wants to write");
-        sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_CLOSING);
-        sxe_watch_events(this, sxe_ssl_io_cb_write, EV_WRITE, 1);
-        result = SXE_RETURN_IN_PROGRESS;
-        break;
-
-    case SSL_ERROR_SSL:
-        SXEL31I("SSL error: %u", ERR_error_string(ERR_get_error(), errstr));
-        handle_ssl_error_close(this, state);
-        break;
-    case SSL_ERROR_SYSCALL:
-        if (ret == 0) {
-            SXEL31I("SSL received illegal EOF: %u", ERR_error_string(ERR_get_error(), errstr));
-        }
-        else {
-            SXEL32I("SSL system call error: %s (%d)", strerror(errno), errno);
-        }
-        handle_ssl_error_close(this, state);
-        break;
-    case SSL_ERROR_ZERO_RETURN:
-        /* The SSL transport has been closed cleanly. This does not
-         * necessarily mean the underlying transport has been closed. Need to
-         * do an sxe_close() here. */
-        SXEL30I("SSL zero return");
-        handle_ssl_error_close(this, state);
-        break;
-    default:
-        SXEL30I("Different SSL error");
-        handle_ssl_error_close(this, state);
-        break;
-    }
+    result = handle_ssl_io_error(this, ssl, ret, state, SXE_SSL_S_CLOSING, SXE_SSL_S_CLOSING, "sxe_ssl_close", "SSL_shutdown"); /* Coverage exclusion: todo - get SSL_shutdown() to fail */
 
 SXE_EARLY_OUT:
     SXER82I("return %d // %s", result, sxe_return_to_string(result));
@@ -382,7 +378,6 @@ sxe_ssl_send(SXE * this, SXE_OUT_EVENT_WRITTEN on_complete)
     const char  * sendbuf = this->send_buf + this->send_buf_written;
     size_t        trysend = (size_t)(this->send_buf_len - this->send_buf_written);
     SXE_SSL_STATE state;
-    char          errstr[1024];
 
     SXEE81I("sxe_ssl_send() // SSL socket=%d", this->socket);
 
@@ -391,14 +386,18 @@ sxe_ssl_send(SXE * this, SXE_OUT_EVENT_WRITTEN on_complete)
     state = sxe_pool_index_to_state(sxe_ssl_array, this->ssl_id);
     SXEA11I(state == SXE_SSL_S_ESTABLISHED || state == SXE_SSL_S_WRITING,
             "sxe_ssl_send() in unexpected state %s", sxe_ssl_state_to_string(state));
-    SXED90I(sendbuf, trysend);
 
     ERR_clear_error();
     nbytes = SSL_write(ssl->conn, sendbuf, trysend);
     if (nbytes > 0) {
+        SXED90I(sendbuf, nbytes);
+
         if ((unsigned)nbytes == trysend) {
             SXEL81I("sxe_ssl_send(): wrote entire buffer of %u bytes, done!", trysend);
-            sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_ESTABLISHED);
+            if (state != SXE_SSL_S_ESTABLISHED) {
+                sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_ESTABLISHED);
+                sxe_watch_events(this, sxe_ssl_io_cb_read, EV_READ, 1);
+            }
             result = SXE_RETURN_OK;
             goto SXE_EARLY_OUT;
         }
@@ -413,42 +412,7 @@ sxe_ssl_send(SXE * this, SXE_OUT_EVENT_WRITTEN on_complete)
         goto SXE_EARLY_OUT;
     }
 
-    switch (SSL_get_error(ssl->conn, nbytes)) {
-    case SSL_ERROR_WANT_READ:
-        SXEL80I("sxe_ssl_send(): SSL_write() wants to read");
-        sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_WRITING);
-        sxe_watch_events(this, sxe_ssl_io_cb_read, EV_READ, 1);
-        result = SXE_RETURN_IN_PROGRESS;
-        break;
-
-    case SSL_ERROR_WANT_WRITE:
-        SXEL80I("sxe_ssl_send(): SSL_write() wants to write");
-        sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_WRITING);
-        sxe_watch_events(this, sxe_ssl_io_cb_write, EV_WRITE, 1);
-        result = SXE_RETURN_IN_PROGRESS;
-        break;
-
-    case SSL_ERROR_SSL:
-        SXEL31I("SSL error: %u", ERR_error_string(ERR_get_error(), errstr));
-        handle_ssl_error_close(this, state);
-        break;
-    case SSL_ERROR_SYSCALL:
-        if (nbytes == 0) {
-            SXEL31I("SSL received illegal EOF: %u", ERR_error_string(ERR_get_error(), errstr));
-        }
-        else {
-            SXEL32I("SSL system call error: %s (%d)", strerror(errno), errno);
-        }
-        handle_ssl_error_close(this, state);
-        break;
-    case SSL_ERROR_ZERO_RETURN:
-        handle_ssl_error_close(this, state);
-        break;
-    default:
-        SXEL30I("Different SSL error");
-        handle_ssl_error_close(this, state);
-        break;
-    }
+    result = handle_ssl_io_error(this, ssl, nbytes, state, SXE_SSL_S_WRITING, SXE_SSL_S_WRITING, "sxe_ssl_send", "SSL_write");  /* Coverage exclusion: todo - get SSL_write() to fail */
 
 SXE_EARLY_OUT:
     SXER82I("return %d // %s", result, sxe_return_to_string(result));
@@ -461,7 +425,6 @@ do_ssl_read(SXE * this)
     SXE_SSL     * ssl;
     int           nbytes;
     SXE_SSL_STATE state;
-    char          errstr[1024];
 
     SXEE81I("do_ssl_read() // SSL socket=%d", this->socket);
 
@@ -471,54 +434,18 @@ do_ssl_read(SXE * this)
     SXEA11I(state == SXE_SSL_S_ESTABLISHED || state == SXE_SSL_S_READING,
             "do_ssl_read() in unexpected state %s", sxe_ssl_state_to_string(state));
 
-    ERR_clear_error();
-    nbytes = SSL_read(ssl->conn, this->in_buf + this->in_total, sizeof(this->in_buf) - this->in_total);
-    if (nbytes > 0) {
-        sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_ESTABLISHED);
-        sxe_handle_read_data(this, nbytes, NULL);
-        goto SXE_EARLY_OUT;
-    }
-
-    switch (SSL_get_error(ssl->conn, nbytes)) {
-    case SSL_ERROR_WANT_READ:
-        SXEL80I("do_ssl_read(): SSL_write() wants to read");
-        sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_READING);
-        sxe_watch_events(this, sxe_ssl_io_cb_read, EV_READ, 1);
-        break;
-
-    case SSL_ERROR_WANT_WRITE:
-        SXEL80I("do_ssl_read(): SSL_write() wants to write");
-        sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_READING);
-        sxe_watch_events(this, sxe_ssl_io_cb_write, EV_WRITE, 1);
-        break;
-
-    case SSL_ERROR_SSL:
-        SXEL31I("SSL error: %u", ERR_error_string(ERR_get_error(), errstr));
-        handle_ssl_error_close(this, state);
-        break;
-    case SSL_ERROR_SYSCALL:
-        if (nbytes == 0) {
-            SXEL31I("SSL received illegal EOF: %u", ERR_error_string(ERR_get_error(), errstr));
+    for (;;) {
+        ERR_clear_error();
+        nbytes = SSL_read(ssl->conn, this->in_buf + this->in_total, sizeof(this->in_buf) - this->in_total);
+        if (nbytes > 0) {
+            sxe_handle_read_data(this, nbytes, NULL);
+            continue;
         }
-        else {
-            SXEL32I("SSL system call error: %s (%d)", strerror(errno), errno);
-        }
-        handle_ssl_error_close(this, state);
-        break;
-    case SSL_ERROR_ZERO_RETURN:
-        /* The SSL transport has been closed cleanly. This does not
-         * necessarily mean the underlying transport has been closed. Need to
-         * do an sxe_close() here. */
-        SXEL30I("SSL zero return");
-        handle_ssl_error_close(this, state);
-        break;
-    default:
-        SXEL30I("Different SSL error");
-        handle_ssl_error_close(this, state);
+
+        handle_ssl_io_error(this, ssl, nbytes, state, SXE_SSL_S_ESTABLISHED, SXE_SSL_S_READING, "do_ssl_read", "SSL_read");
         break;
     }
 
-SXE_EARLY_OUT:
     SXER80I("return");
     return;
 }
@@ -528,6 +455,9 @@ sxe_ssl_io_cb_read(EV_P_ ev_io *io, int revents)
 {
     SXE           * this  = (SXE *)io->data;
     SXE_SSL_STATE   state;
+
+    SXE_UNUSED_PARAMETER(loop);
+    SXE_UNUSED_PARAMETER(revents);
 
     SXEA10I(this->ssl_id != SXE_POOL_NO_INDEX, "sxe_ssl_io_cb_read() called on non-SSL SXE");
     state = sxe_pool_index_to_state(sxe_ssl_array, this->ssl_id);
@@ -540,14 +470,14 @@ sxe_ssl_io_cb_read(EV_P_ ev_io *io, int revents)
     case SXE_SSL_S_READING:
         do_ssl_read(this);
         break;
-    case SXE_SSL_S_WRITING:
-        sxe_ssl_send(this, this->out_event_written);
-        break;
-    case SXE_SSL_S_CLOSING:
-        sxe_ssl_close(this);
-        break;
+    case SXE_SSL_S_WRITING:                                                                         /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
+        sxe_ssl_send(this, this->out_event_written);                                                /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
+        break;                                                                                      /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
+    case SXE_SSL_S_CLOSING:                                                                         /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_READ */
+        sxe_ssl_close(this);                                                                        /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_READ */
+        break;                                                                                      /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_READ */
     default:
-        SXEA11I(0, "Unhandled sxe_ssl_io_cb_read() in state %s", sxe_ssl_state_to_string(state));
+        SXEA11I(0, "Unhandled sxe_ssl_io_cb_read() in state %s", sxe_ssl_state_to_string(state));   /* Coverage exclusion: can't happen without adding states. */
         break;
     }
 }
@@ -555,27 +485,36 @@ sxe_ssl_io_cb_read(EV_P_ ev_io *io, int revents)
 static void
 sxe_ssl_io_cb_write(EV_P_ ev_io *io, int revents)
 {
+    SXE_RETURN      result;
     SXE           * this  = (SXE *)io->data;
     SXE_SSL_STATE   state;
+
+    SXE_UNUSED_PARAMETER(loop);
+    SXE_UNUSED_PARAMETER(revents);
 
     SXEA10I(this->ssl_id != SXE_POOL_NO_INDEX, "sxe_ssl_io_cb_write() called on non-SSL SXE");
     state = sxe_pool_index_to_state(sxe_ssl_array, this->ssl_id);
 
     switch (state) {
-    case SXE_SSL_S_CONNECTED:
-        do_ssl_handshake(this);
-        break;
-    case SXE_SSL_S_READING:
-        do_ssl_read(this);
-        break;
+    case SXE_SSL_S_CONNECTED:                                                                       /* Coverage exclusion: todo - make SSL_do_handshake() return SSL_ERROR_WANT_WRITE */
+        do_ssl_handshake(this);                                                                     /* Coverage exclusion: todo - make SSL_do_handshake() return SSL_ERROR_WANT_WRITE */
+        break;                                                                                      /* Coverage exclusion: todo - make SSL_do_handshake() return SSL_ERROR_WANT_WRITE */
+    case SXE_SSL_S_READING:                                                                         /* Coverage exclusion: todo - make SSL_read() return SSL_ERROR_WANT_WRITE */
+        do_ssl_read(this);                                                                          /* Coverage exclusion: todo - make SSL_read() return SSL_ERROR_WANT_WRITE */
+        break;                                                                                      /* Coverage exclusion: todo - make SSL_read() return SSL_ERROR_WANT_WRITE */
     case SXE_SSL_S_WRITING:
-        sxe_ssl_send(this, this->out_event_written);
+        result = sxe_ssl_send(this, this->out_event_written);
+        if (result != SXE_RETURN_IN_PROGRESS) {
+            if (this->out_event_written) {
+                (*this->out_event_written)(this, result);
+            }
+        }
         break;
-    case SXE_SSL_S_CLOSING:
-        sxe_ssl_close(this);
-        break;
+    case SXE_SSL_S_CLOSING:                                                                         /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_WRITE */
+        sxe_ssl_close(this);                                                                        /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_WRITE */
+        break;                                                                                      /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_WRITE */
     default:
-        SXEA11I(0, "Unhandled sxe_ssl_io_cb_write() in state %s", sxe_ssl_state_to_string(state));
+        SXEA11I(0, "Unhandled sxe_ssl_io_cb_write() in state %s", sxe_ssl_state_to_string(state));  /* Coverage exclusion: can't happen without adding states. */
         break;
     }
 }
