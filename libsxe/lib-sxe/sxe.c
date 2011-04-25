@@ -1397,80 +1397,110 @@ SXE_EARLY_OR_ERROR_OUT:
     return result;
 }
 
+static SXE_RETURN sxe_send_buffers_again(SXE * this);
+
 static void
-sxe_io_cb_send(EV_P_ ev_io * io, int revents) /* Coverage Exclusion - todo: win32 coverage */
+sxe_io_cb_send_buffers(EV_P_ ev_io * io, int revents)
 {
-    SXE_RETURN result = SXE_RETURN_OK; /* Coverage Exclusion - todo: win32 coverage */
-    SXE * this = (SXE *)io->data; /* Coverage Exclusion - todo: win32 coverage */
+    SXE_RETURN result = SXE_RETURN_OK;
+    SXE * this = (SXE *)io->data;
     SXE_UNUSED_PARAMETER(revents);
 
 #if EV_MULTIPLICITY
     SXE_UNUSED_PARAMETER(loop);
 #endif
 
-    SXEE83I("sxe_io_cb_send(this=%p, revents=%u) // socket=%d", this, revents, this->socket);
+    SXEE83I("sxe_io_cb_send_buffers(this=%p, revents=%u) // socket=%d", this, revents, this->socket);
+    result = sxe_send_buffers_again(this);
 
-    if (this->send_buf_written != this->send_buf_len) { /* Coverage Exclusion - todo: win32 coverage */
-        result = sxe_write(this, (this->send_buf + this->send_buf_written), (this->send_buf_len - this->send_buf_written));
-        this->send_buf_written += this->last_write;
+    if (result != SXE_RETURN_IN_PROGRESS) {
+        SXEL80I("Re-enabling read events on this SXE");
+        sxe_watch_read(this);
+
+        (*this->out_event_written)(this, result);
     }
 
-    if (result != SXE_RETURN_OK) {  /* Coverage Exclusion - todo: win32 coverage */
-        if (result == SXE_RETURN_WARN_WOULD_BLOCK) { /* Coverage Exclusion: todo: win32 coverage */
-           SXEL82("Partial write, written %u bytes of %u", this->send_buf_written, this->send_buf_len);
-           goto SXE_EARLY_OUT; /* Coverage Exclusion - todo: win32 coverage */
+    SXER80I("return");
+}
+
+static SXE_RETURN
+sxe_send_buffers_again(SXE * this)
+{
+    SXE_RETURN   result = SXE_RETURN_OK;
+    SXE_BUFFER * buffer;
+
+    SXEE82I("sxe_send_buffers_again(this=%p) // socket=%d", this, this->socket);
+    buffer = sxe_list_walker_find(&this->send_list_walk);
+
+    while (buffer) {
+        result = sxe_write(this, buffer->ptr + buffer->sent, buffer->len - buffer->sent);
+        buffer->sent += this->last_write;
+
+        if (buffer->sent == buffer->len) {
+            buffer = sxe_list_walker_step(&this->send_list_walk);
+        }
+
+        if (result == SXE_RETURN_WARN_WOULD_BLOCK) {
+            result = SXE_RETURN_IN_PROGRESS;
+            SXEL82("sxe_write wrote %u bytes of %u; scheduling another write", buffer->sent, buffer->len);
+            sxe_watch_write(this);
+            break;
+        }
+        else if (result != SXE_RETURN_OK) {
+            break;
         }
     }
 
-    SXEA10(this->send_buf_written == this->send_buf_len, "if sxe_write returns SXE_RETURN_OK then all data should be writen"); /* Coverage Exclusion - todo: win32 coverage */
+    SXER81I("return %s", sxe_return_to_string(result));
+    return result;
+}
 
-    SXEL80I("Re-enabling read events on this SXE");
-    sxe_watch_read(this); /* Coverage Exclusion - todo: win32 coverage */
+SXE_RETURN
+sxe_send_buffers(SXE * this, SXE_LIST *buffers, SXE_OUT_EVENT_WRITTEN on_complete)
+{
+    SXE_RETURN result = SXE_RETURN_OK;
 
-    if (this->out_event_written) { /* Coverage Exclusion - todo: win32 coverage */
-        (*this->out_event_written)(this, result);
-        this->out_event_written = NULL;
+    SXEE83I("sxe_send_buffers(buffers=%p,on_complete=%p) // socket=%d", buffers, on_complete, this->socket);
+    SXEA10I(buffers != NULL,     "sxe_send_buffers: buffers pointer can't be NULL");
+    SXEA10I(on_complete != NULL, "sxe_send_buffers: on_complete callback function pointer can't be NULL");
+
+    SXEL81I("sxe_send_buffers(): preparing to send %u buffers", SXE_LIST_GET_LENGTH(buffers));
+
+    sxe_list_walker_construct(&this->send_list_walk, buffers);
+    sxe_list_walker_step(&this->send_list_walk); /* advance to the first entry */
+    this->out_event_written = on_complete;
+
+    if (this->flags & SXE_FLAG_IS_SSL) {
+        result = sxe_ssl_send_buffers(this);
+        goto SXE_EARLY_OUT;
     }
 
-SXE_EARLY_OUT: /* Coverage Exclusion - todo: win32 coverage */
-    SXER80I("return");
-} /* Coverage Exclusion - todo: win32 coverage */
+    result = sxe_send_buffers_again(this);
+
+SXE_EARLY_OUT:
+    SXER81I("return %s", sxe_return_to_string(result));
+    return result;
+}
 
 /* TODO: new sxe_send() parameter to auto close after writing all data */
 
 SXE_RETURN
 sxe_send(SXE * this, const void * buf, unsigned size, SXE_OUT_EVENT_WRITTEN on_complete)
 {
-    SXE_RETURN result = SXE_RETURN_OK;
+    SXE_RETURN result;
 
     SXEE83I("sxe_send(buf=%p, size=%u, on_complete=%p)", buf, size, on_complete);
     SXEA10I(on_complete != NULL, "sxe_send: on_complete callback function pointer can't be NULL");
 
-    this->send_buf          = (const char *)buf;
-    this->send_buf_len      = size;
-    this->send_buf_written  = 0;
+    SXE_LIST_CONSTRUCT(&this->send_list, 0, SXE_BUFFER, node);
+    sxe_list_push(&this->send_list, &this->send_buffer);
 
-    if (this->flags & SXE_FLAG_IS_SSL) {
-        result = sxe_ssl_send(this, on_complete);
-        goto SXE_EARLY_OUT;
-    }
+    this->send_buffer.ptr  = (const char *)buf;
+    this->send_buffer.len  = size;
+    this->send_buffer.sent = 0;
 
-    result = sxe_write(this, (this->send_buf + this->send_buf_written), (this->send_buf_len - this->send_buf_written));
-    this->send_buf_written += this->last_write;
+    result = sxe_send_buffers(this, &this->send_list, on_complete);
 
-    // Only partials need the EV_WRITE callback, even error cases just return...
-    if (result == SXE_RETURN_WARN_WOULD_BLOCK) {
-        result = SXE_RETURN_IN_PROGRESS; /* Coverage Exclusion - todo: win32 coverage */
-        SXEL82("Initial sxe_write wrote %u bytes of %u", this->send_buf_written, this->send_buf_len);
-    }
-    else {
-        goto SXE_EARLY_OUT;
-    }
-
-    this->out_event_written = on_complete; /* Coverage Exclusion - todo: win32 coverage */
-    sxe_watch_write(this);
-
-SXE_EARLY_OUT:
     SXER81I("return %s", sxe_return_to_string(result));
     return result;
 }
@@ -1623,11 +1653,11 @@ sxe_watch_read(SXE * this)
 
 void
 sxe_watch_write(SXE * this)
-{                                                           /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
-    SXEE80I("sxe_watch_write()");                           /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
-    sxe_watch_events(this, sxe_io_cb_send, EV_WRITE, 1);    /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
-    SXER80I("return");                                      /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
-}                                                           /* Coverage Exclusion: todo - improve sxe_send() tests to reliably send a buffer too big to fit in one send */
+{
+    SXEE80I("sxe_watch_write()");
+    sxe_watch_events(this, sxe_io_cb_send_buffers, EV_WRITE, 1);
+    SXER80I("return");
+}
 
 /* TODO: Make useful or delete
  */

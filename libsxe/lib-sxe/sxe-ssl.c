@@ -387,49 +387,57 @@ SXE_EARLY_OUT:
 }
 
 SXE_RETURN
-sxe_ssl_send(SXE * this, SXE_OUT_EVENT_WRITTEN on_complete)
+sxe_ssl_send_buffers(SXE * this)
 {
     SXE_RETURN    result  = SXE_RETURN_ERROR_INTERNAL;
     SXE_SSL     * ssl;
-    int           nbytes;
-    const char  * sendbuf = this->send_buf + this->send_buf_written;
-    size_t        trysend = (size_t)(this->send_buf_len - this->send_buf_written);
+    SXE_BUFFER  * buffer;
     SXE_SSL_STATE state;
 
-    SXEE81I("sxe_ssl_send() // SSL socket=%d", this->socket);
+    SXEE81I("sxe_ssl_send_buffers() // SSL socket=%d", this->socket);
 
-    SXEA10I(this->ssl_id != SXE_POOL_NO_INDEX, "sxe_ssl_send() called on non-SSL SXE");
+    SXEA10I(this->ssl_id != SXE_POOL_NO_INDEX, "sxe_ssl_send_buffers() called on non-SSL SXE");
     ssl = &sxe_ssl_array[this->ssl_id];
     state = sxe_pool_index_to_state(sxe_ssl_array, this->ssl_id);
     SXEA11I(state == SXE_SSL_S_ESTABLISHED || state == SXE_SSL_S_WRITING,
-            "sxe_ssl_send() in unexpected state %s", sxe_ssl_state_to_string(state));
+            "sxe_ssl_send_buffers() in unexpected state %s", sxe_ssl_state_to_string(state));
 
-    ERR_clear_error();
-    nbytes = SSL_write(ssl->conn, sendbuf, trysend);
-    if (nbytes > 0) {
-        SXED90I(sendbuf, nbytes);
+    buffer = sxe_list_walker_find(&this->send_list_walk);
+    while (buffer) {
+        const char * sendbuf = buffer->ptr + buffer->sent;
+        int          trysend = buffer->len - buffer->sent;
+        int          nbytes;
 
-        if ((unsigned)nbytes == trysend) {
-            SXEL81I("sxe_ssl_send(): wrote entire buffer of %u bytes, done!", trysend);
-            if (state != SXE_SSL_S_ESTABLISHED) {
-                sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_ESTABLISHED);
-                sxe_watch_events(this, sxe_ssl_io_cb_read, EV_READ, 1);
-            }
-            result = SXE_RETURN_OK;
+        ERR_clear_error();
+        nbytes = SSL_write(ssl->conn, sendbuf, trysend);
+        if (nbytes <= 0) {
+            result = handle_ssl_io_error(this, ssl, nbytes, state, SXE_SSL_S_WRITING, SXE_SSL_S_WRITING, "sxe_ssl_send_buffers", "SSL_write");  /* Coverage exclusion: todo - get SSL_write() to fail */
             goto SXE_EARLY_OUT;
         }
 
-        SXEL83I("sxe_ssl_send(): only %u of %u bytes written to SSL socket=%d", nbytes, trysend, this->socket);
+        SXED90I(sendbuf, nbytes);
+        buffer->sent += (size_t)nbytes;
+
+        if (buffer->sent == buffer->len) {
+            SXEL81I("sxe_ssl_send_buffers(): wrote entire buffer of %u bytes, done!", trysend);
+            buffer = sxe_list_walker_step(&this->send_list_walk);
+            continue; /* write another chunk */
+        }
+
+        SXEL83I("sxe_ssl_send_buffers(): only %u of %u bytes written to SSL socket=%d", nbytes, trysend, this->socket);
         sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_WRITING);
-        this->last_write = (unsigned)nbytes;
-        this->send_buf_written += this->last_write;
-        this->out_event_written = on_complete;
         sxe_watch_events(this, sxe_ssl_io_cb_write, EV_WRITE, 1);
         result = SXE_RETURN_IN_PROGRESS;
         goto SXE_EARLY_OUT;
     }
 
-    result = handle_ssl_io_error(this, ssl, nbytes, state, SXE_SSL_S_WRITING, SXE_SSL_S_WRITING, "sxe_ssl_send", "SSL_write");  /* Coverage exclusion: todo - get SSL_write() to fail */
+    /* We've written the last buffer: SXE_RETURN_OK */
+    result = SXE_RETURN_OK;
+
+    if (state != SXE_SSL_S_ESTABLISHED) {
+        sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_ESTABLISHED);
+        sxe_watch_events(this, sxe_ssl_io_cb_read, EV_READ, 1);
+    }
 
 SXE_EARLY_OUT:
     SXER82I("return %d // %s", result, sxe_return_to_string(result));
@@ -490,7 +498,7 @@ sxe_ssl_io_cb_read(EV_P_ ev_io *io, int revents)
         do_ssl_read(this);
         break;
     case SXE_SSL_S_WRITING:                                                                         /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
-        sxe_ssl_send(this, this->out_event_written);                                                /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
+        sxe_ssl_send_buffers(this);                                                /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
         break;                                                                                      /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
     case SXE_SSL_S_CLOSING:                                                                         /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_READ */
         sxe_ssl_close(this);                                                                        /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_READ */
@@ -526,7 +534,7 @@ sxe_ssl_io_cb_write(EV_P_ ev_io *io, int revents)
         do_ssl_read(this);                                                                          /* Coverage exclusion: todo - make SSL_read() return SSL_ERROR_WANT_WRITE */
         break;                                                                                      /* Coverage exclusion: todo - make SSL_read() return SSL_ERROR_WANT_WRITE */
     case SXE_SSL_S_WRITING:
-        result = sxe_ssl_send(this, this->out_event_written);
+        result = sxe_ssl_send_buffers(this);
         if (result != SXE_RETURN_IN_PROGRESS) {
             if (this->out_event_written) {
                 (*this->out_event_written)(this, result);
