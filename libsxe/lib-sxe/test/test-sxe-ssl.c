@@ -32,6 +32,8 @@
 #include "sxe-util.h"
 #include "tap.h"
 
+#define TEST_COPIES  10
+
 #define S25 "abcdefghijklmnopqrstuvwxy"
 #define S10 "0987654321"
 #define S5  "~!@#$"
@@ -91,12 +93,23 @@ tc_chat(const char *from, SXE * s_from, tap_ev_queue q_from, const char *sendbuf
         const char *to,   SXE * s_to,   tap_ev_queue q_to)
 {
     SXE_RETURN   result;
+    SXE_LIST     buflist;
+    SXE_BUFFER   buffers[100];
     tap_ev       event;
     char       * readbuf;
+    int          i;
 
-    SXEA11((readbuf = calloc(1, buflen)) != NULL,                                       "Failed to allocate %u bytes", buflen);
+    SXEA11((readbuf = calloc(TEST_COPIES, buflen)) != NULL,                             "Failed to allocate %u bytes", TEST_COPIES * buflen);
 
-    result = sxe_send(s_from, sendbuf, buflen, test_event_sent);
+    SXE_LIST_CONSTRUCT(&buflist, 0, SXE_BUFFER, node);
+    for (i = 0; i < TEST_COPIES; i++) {
+        buffers[i].ptr  = sendbuf;
+        buffers[i].len  = buflen;
+        buffers[i].sent = 0;
+        sxe_list_push(&buflist, &buffers[i]);
+    }
+
+    result = sxe_send_buffers(s_from, &buflist, test_event_sent);
     if (result == SXE_RETURN_IN_PROGRESS) {
         event = test_tap_ev_queue_shift_wait(q_from, 2);
         is_eq(tap_ev_identifier(event), "test_event_sent",                              "got %s sent event", from);
@@ -106,7 +119,7 @@ tc_chat(const char *from, SXE * s_from, tap_ev_queue q_from, const char *sendbuf
         skip(2, "%s sent immediately - no need to wait for sent event", from);
     }
 
-    test_ev_queue_wait_read(q_to, 2, &event, s_to, "test_event_read", readbuf, buflen, to);
+    test_ev_queue_wait_read(q_to, 2, &event, s_to, "test_event_read", readbuf, TEST_COPIES * buflen, to);
     is_strncmp(sendbuf, readbuf, buflen,                                                "%s read contents from %s", to, from);
 
     free(readbuf);
@@ -141,6 +154,7 @@ main(int argc, char *argv[])
 
     plan_tests(59);
 
+    sxe_log_level = SXE_LOG_LEVEL_LIBRARY_TRACE;
     sxe_register(6, 0);
     sxe_ssl_register(2);
     is(sxe_init(), SXE_RETURN_OK,                                                           "sxe_init succeeded");

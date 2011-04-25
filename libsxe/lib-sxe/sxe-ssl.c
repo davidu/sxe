@@ -192,13 +192,13 @@ handle_ssl_io_error(SXE * this, SXE_SSL *ssl, int ret,
         break;
 
     case SSL_ERROR_WANT_WRITE:
-        SXEL82I("%s(): %s() wants to write!", func, op);                                            /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
-        if (state != write_state) {                                                                 /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
-            sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, write_state);    /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
-        }                                                                                           /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
-        sxe_watch_events(this, sxe_ssl_io_cb_write, EV_WRITE, 1);                                   /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
-        result = SXE_RETURN_IN_PROGRESS;                                                            /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
-        break;                                                                                      /* Coverage exclusion: todo - get SSL_read() to return SSL_ERROR_WANT_WRITE */
+        SXEL82I("%s(): %s() wants to write!", func, op);
+        if (state != write_state) {
+            sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, write_state);
+        }
+        sxe_watch_events(this, sxe_ssl_io_cb_write, EV_WRITE, 1);
+        result = SXE_RETURN_IN_PROGRESS;
+        break;
 
     case SSL_ERROR_ZERO_RETURN:
         /* The SSL transport has been closed cleanly. This does not
@@ -419,16 +419,12 @@ sxe_ssl_send_buffers(SXE * this)
         buffer->sent += (size_t)nbytes;
 
         if (buffer->sent == buffer->len) {
-            SXEL81I("sxe_ssl_send_buffers(): wrote entire buffer of %u bytes, done!", trysend);
+            SXEL82I("All %u bytes written to SSL socket=%d; on to the next buffer", trysend, this->socket);
             buffer = sxe_list_walker_step(&this->send_list_walk);
-            continue; /* write another chunk */
         }
-
-        SXEL83I("sxe_ssl_send_buffers(): only %u of %u bytes written to SSL socket=%d", nbytes, trysend, this->socket);
-        sxe_pool_set_indexed_element_state(sxe_ssl_array, this->ssl_id, state, SXE_SSL_S_WRITING);
-        sxe_watch_events(this, sxe_ssl_io_cb_write, EV_WRITE, 1);
-        result = SXE_RETURN_IN_PROGRESS;
-        goto SXE_EARLY_OUT;
+        else {
+            SXEL83I("Only %u of %u bytes written to SSL socket=%d", nbytes, trysend, this->socket);
+        }
     }
 
     /* We've written the last buffer: SXE_RETURN_OK */
@@ -498,7 +494,7 @@ sxe_ssl_io_cb_read(EV_P_ ev_io *io, int revents)
         do_ssl_read(this);
         break;
     case SXE_SSL_S_WRITING:                                                                         /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
-        sxe_ssl_send_buffers(this);                                                /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
+        sxe_ssl_send_buffers(this);                                                                 /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
         break;                                                                                      /* Coverage exclusion: todo - make SSL_write() return SSL_ERROR_WANT_READ */
     case SXE_SSL_S_CLOSING:                                                                         /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_READ */
         sxe_ssl_close(this);                                                                        /* Coverage exclusion: todo - make SSL_shutdown() return SSL_ERROR_WANT_READ */
