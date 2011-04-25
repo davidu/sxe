@@ -114,6 +114,7 @@ sxe_ssl_enable(SXE * this)
 
     SXEE80I("sxe_ssl_enable()");
 
+    SXEA11I(sxe_ssl_array != NULL, "SSL: cannot call %s() before sxe_ssl_init()", __func__);
     SXEA10I(this->flags & SXE_FLAG_IS_STREAM, "SXE is not a stream: cannot enable SSL");
 
     this->flags |= SXE_FLAG_IS_SSL;
@@ -312,6 +313,7 @@ sxe_ssl_accept(SXE * this)
     SXE_RETURN   result;
 
     SXEE80I("sxe_ssl_accept()");
+    SXEA11I(sxe_ssl_array != NULL, "SSL: cannot call %s() before sxe_ssl_init()", __func__);
 
     /* Allow calling sxe_ssl_accept() by an application on a non-SSL socket */
     sxe_ssl_enable(this);
@@ -335,6 +337,7 @@ sxe_ssl_connect(SXE * this)
     SXE_RETURN   result;
 
     SXEE80I("sxe_ssl_connect()");
+    SXEA11I(sxe_ssl_array != NULL, "SSL: cannot call %s() before sxe_ssl_init()", __func__);
 
     /* Allow calling sxe_ssl_accept() by an application on a non-SSL socket */
     sxe_ssl_enable(this);

@@ -111,6 +111,7 @@ typedef struct SXE {
 #define SXE_EVENT_CLOSE(this)            (      (this)->in_event_close)
 #define SXE_ID(this)                     (      (this)->id)
 #define SXE_WRITE_LITERAL(this, literal) sxe_write(this, literal, SXE_LITERAL_LENGTH(literal))
+#define SXE_SEND_LITERAL(this, l, func)  sxe_send(this, l, SXE_LITERAL_LENGTH(l), func)
 
 #define SXE_BUF_CLEAR(this)              sxe_buf_clear(this)         /* For backward compatibility only - this macro is deprecated */
 #define SXE_LOCAL_ADDR(this)             sxe_get_local_addr(this)    /* For backward compatibility only - this macro is deprecated */
