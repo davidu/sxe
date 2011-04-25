@@ -852,7 +852,7 @@ sxe_httpd_response_eoh(SXE_HTTPD_REQUEST *request)
             buffer->space[buffer->len + 0] = '\r';
             buffer->space[buffer->len + 1] = '\n';
             buffer->len += 2;
-            SXEL82I("sxe_httpd_response_header(): wrote EOF to buffer %u: now u bytes", SXE_LIST_GET_LENGTH(&request->out_buffer_list), buffer->len);
+            SXEL82I("sxe_httpd_response_eoh(): wrote EOF to buffer %u: now %u bytes", SXE_LIST_GET_LENGTH(&request->out_buffer_list), buffer->len);
             goto SXE_SUCCESS_OUT;
         }
     }

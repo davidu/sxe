@@ -159,7 +159,6 @@ main(void)
     SXE_RETURN               result;
     SXE_HTTPD                httpd;
     SXE_HTTPD_REQUEST      * request;
-    sxe_httpd_header_handler old_header_handler;
     tap_ev                   ev;
     SXE                    * listener;
     SXE                    * c;

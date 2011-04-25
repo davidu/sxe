@@ -163,7 +163,7 @@ close_ssl_socket(SXE * this, SXE_SSL_STATE state)
 
     sxe_close(this);
 
-    if (this->in_event_close) {
+    if (state >= SXE_SSL_S_ESTABLISHED && this->in_event_close) {
         (*this->in_event_close)(this);
     }
 
@@ -178,9 +178,16 @@ handle_ssl_io_error(SXE * this, SXE_SSL *ssl, int ret,
     SXE_RETURN   result = SXE_RETURN_ERROR_INTERNAL;
     char         errstr[1024];
 
-    SXEE86I("handle_ssl_io_error(ret=%u,state=%s,read_state=%s,write_state=%s,func=%s,op=%s",
+    SXEE86I("handle_ssl_io_error(ret=%d,state=%s,read_state=%s,write_state=%s,func=%s,op=%s",
             ret, sxe_ssl_state_to_string(state), sxe_ssl_state_to_string(read_state),
             sxe_ssl_state_to_string(write_state), func, op);
+
+    /* Must have been closed by a read handler detecting an error at a higher
+     * level. Immediately return with SXE_RETURN_ERROR_NO_CONNECTION */
+    if (this->ssl_id == SXE_POOL_NO_INDEX) {
+        result = SXE_RETURN_ERROR_NO_CONNECTION;                                                    /* Coverage exclusion: todo - figure out why this sometimes happens in Firefox */
+        goto SXE_EARLY_OUT;                                                                         /* Coverage exclusion: todo - figure out why this sometimes happens in Firefox */
+    }
 
     switch (SSL_get_error(ssl->conn, ret)) {
     case SSL_ERROR_WANT_READ:
@@ -211,7 +218,7 @@ handle_ssl_io_error(SXE * this, SXE_SSL *ssl, int ret,
         break;
 
     case SSL_ERROR_SSL:
-        SXEL33I("%s(): %s() error: %u", func, op, ERR_error_string(ERR_get_error(), errstr));       /* Coverage exclusion: todo - get SSL function to return SSL_ERROR_SSL */
+        SXEL33I("%s(): %s() error: %s", func, op, ERR_error_string(ERR_get_error(), errstr));       /* Coverage exclusion: todo - get SSL function to return SSL_ERROR_SSL */
         close_ssl_socket(this, state);                                                              /* Coverage exclusion: todo - get SSL function to return SSL_ERROR_SSL */
         break;                                                                                      /* Coverage exclusion: todo - get SSL function to return SSL_ERROR_SSL */
 
@@ -241,6 +248,7 @@ handle_ssl_io_error(SXE * this, SXE_SSL *ssl, int ret,
         break;                                                                                      /* Coverage exclusion: todo - get SSL functions to fail in other ways */
     }
 
+SXE_EARLY_OUT:
     SXER82("return %u // %s", result, sxe_return_to_string(result))
     return result;
 }
