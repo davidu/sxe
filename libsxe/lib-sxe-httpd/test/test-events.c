@@ -142,6 +142,14 @@ client_read(SXE * this, int length)
     SXER60I("return");
 }
 
+static void
+client_close(SXE * this)
+{
+    SXEE62I("%s(this=%p)", __func__, this);
+    tap_ev_queue_push(q_client, __func__, 1, "this", this);
+    SXER60("return");
+}
+
 int
 main(void)
 {
@@ -153,7 +161,7 @@ main(void)
     SXE                    * c;
     char                     buffer[1024];
 
-    tap_plan(27, TAP_FLAG_ON_FAILURE_EXIT, NULL);
+    tap_plan(34, TAP_FLAG_ON_FAILURE_EXIT, NULL);
     sxe_register(4, 0);        /* http listener and connections */
     sxe_register(8, 0);        /* http clients */
     sxe_init();
@@ -226,7 +234,7 @@ main(void)
     SXE_WRITE_LITERAL(c, "/this/is/a/URL HTTP/1.1\r\nConnection: whatever\r\nHost: interesting\r\nContent-Length: 10\r\n\r\n12345678\r\n");
     is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_respond",            "HTTPD: respond event");
     request = SXE_CAST_NOCONST(SXE_HTTPD_REQUEST *, tap_ev_arg(ev, "request"));
-    sxe_httpd_response_raw(request, EXPECTED_RESPONSE, SXE_LITERAL_LENGTH(EXPECTED_RESPONSE));
+    sxe_httpd_response_copy_raw_data(request, EXPECTED_RESPONSE, SXE_LITERAL_LENGTH(EXPECTED_RESPONSE));
     sxe_httpd_response_end(request, h_sent, NULL);
     is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_sent",               "HTTPD: finished responding");
     test_ev_queue_wait_read(q_client, TEST_WAIT, &ev, c, "client_read", buffer, SXE_LITERAL_LENGTH(EXPECTED_RESPONSE), "client");
@@ -234,6 +242,25 @@ main(void)
 
     sxe_close(c);
     is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_close",              "HTTPD: close event");
+
+    /* For coverage on window */
+    c = sxe_new_tcp(NULL, "0.0.0.0", 0, client_connect, client_read, client_close);
+    sxe_connect(c, "127.0.0.1", SXE_LOCAL_PORT(listener));
+
+    is_eq(test_tap_ev_queue_identifier_wait(q_client, TEST_WAIT, &ev), "client_connect",      "Client connected to HTTPD");
+    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_connect",            "HTTPD: connected");
+
+    SXE_WRITE_LITERAL(c, "GET /simple HTTP/1.1\r\n\r\n");
+    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_respond",            "HTTPD: respond event");
+    request = (SXE_HTTPD_REQUEST *)(long)tap_ev_arg(ev, "request");
+    sxe_httpd_response_simple(request, h_sent, NULL, 200, "OK", NULL, "Connection", "close", NULL);
+    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_sent",               "HTTPD: finished responding");
+    sxe_close(request->sxe);
+
+#define TEST_200_CLOSE_RESPONSE "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+    test_ev_queue_wait_read(q_client, TEST_WAIT, &ev, c, "client_read", buffer, SXE_LITERAL_LENGTH(TEST_200_CLOSE_RESPONSE), "client");
+    is_strncmp(buffer, TEST_200_CLOSE_RESPONSE, SXE_LITERAL_LENGTH(TEST_200_CLOSE_RESPONSE),  "GET response is a 200 OK with close");
+    is_eq(test_tap_ev_queue_identifier_wait(q_client, TEST_WAIT, &ev), "client_close",                        "Got a client close event");
 
     return exit_status();
 }

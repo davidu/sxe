@@ -30,17 +30,6 @@
 
 #define TEST_WAIT 5.0
 
-#ifdef WINDOWS_NT
-
-int
-main(void)
-{
-    plan_skip_all("No sendfile on windows");
-    return 0;
-}
-
-#else
-
 static void
 handle_sent(SXE_HTTPD_REQUEST *request, SXE_RETURN final, void *user_data)
 {
@@ -91,7 +80,7 @@ main(void)
     SXE *listener;
     SXE *c;
 
-    plan_tests(5);
+    plan_tests(4);
 
     sxe_register(4, 0);        /* http listener and connections */
     sxe_register(8, 0);        /* http clients */
@@ -112,19 +101,13 @@ main(void)
 
     {
         char readbuf[65536];
-        SXE_BUFFER buffer, buffer2, buffer3;
-        struct stat sb;
+        SXE_BUFFER buffer, buffer2;
         unsigned expected_length;
-        int fd;
-
-        SXEA11((fd = open("sxe-httpd-proto.h", O_RDONLY)) >= 0, "Failed to open sxe-httpd-proto.h: %s", strerror(errno));
-        SXEA11(fstat(fd, &sb) >= 0, "Failed to fstat sxe-httpd-proto.h: %s", strerror(errno));
 
         buffer.ptr  = "Hello, world";
         buffer.len  = strlen(buffer.ptr);
         buffer.sent = 0;
         buffer2     = buffer;
-        buffer3     = buffer;
 
         /* NOTE: these numbers are carefully designed so that we'll hit the
          * following conditions:
@@ -143,36 +126,32 @@ main(void)
 
         expected_length = SXE_LITERAL_LENGTH("HTTP/1.1 200 OK\r\n")                                 //   17 =   17      =   17
                         + SXE_LITERAL_LENGTH("Content-Type: text/plain; charset=.UTF-8.\r\n")       // + 43 =   60      =   60
-                        + SXE_LITERAL_LENGTH("Content-Length: dddd\r\n")                            // + 22 =   82      =   82
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  159      =  159
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  236      =  236
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  313      =  313
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  390      =  390
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  467      =  467
+                        + SXE_LITERAL_LENGTH("Content-Length: dd\r\n")                              // + 20 =   80      =   80
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  157      =  157
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  234      =  234
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  311      =  311
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  388      =  388
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  465      =  465
                         /* end of first buffer */
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =   77      =  544
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  154      =  621
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  231      =  698
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  308      =  775
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  385      =  852
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  462      =  929
-                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V49 "\r\n")                              // + 49 =  511      =  978
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =   77      =  542
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  154      =  619
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  231      =  696
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  308      =  773
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  385      =  850
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V77 "\r\n")                              // + 77 =  462      =  927
+                        + SXE_LITERAL_LENGTH(X_NAM "x: " X_V49 "\r\n")                              // + 49 =  511      =  976
                         /* end of second buffer */
-                        + SXE_LITERAL_LENGTH("\r\n")                                                // +  2 =    2      =  980
+                        + SXE_LITERAL_LENGTH("\r\n")                                                // +  2 =    2      =  978
                         /* end of headers - rest is body */
-                        + buffer.len                                                                // + 12 =   14      =  992
-                        + buffer.len                                                                // + 12 =   26      = 1004
-                        + buffer.len                                                                // + 12 =   38      = 1016
-                        /* remainder is file */
-                        + sb.st_size
-                        + buffer.len
-                        + buffer.len
+                        + buffer.len                                                                // + 12 =   14      =  990
+                        + buffer.len                                                                // + 12 =   26      = 1002
+                        + buffer.len                                                                // + 12 =   38      = 1014
                         ;
 
         /* NOTE: sizeof readbuf just happens to be >> size of sxe-httpd-proto.h, so that's why we use it here */
         sxe_httpd_response_start(request, 200, "OK");
         sxe_httpd_response_header(request, "Content-Type", "text/plain; charset=\"UTF-8\"", 0);
-        sxe_httpd_response_content_length(request, (int)sb.st_size);
+        sxe_httpd_response_content_length(request, (int)(3 * buffer.len));
         sxe_httpd_response_header(request, X_NAM "1", X_V77, 0);
         sxe_httpd_response_header(request, X_NAM "2", X_V77, 0);
         sxe_httpd_response_header(request, X_NAM "3", X_V77, 0);
@@ -189,19 +168,13 @@ main(void)
         sxe_httpd_response_copy_body_data(request, "Hello, world", 0);
         sxe_httpd_response_add_body_buffer(request, &buffer);
         sxe_httpd_response_add_raw_buffer(request, &buffer2);
-        sxe_httpd_response_sendfile(request, fd, sb.st_size, handle_sent, NULL);
-        is_eq(test_tap_ev_identifier_wait(TEST_WAIT, &ev), "handle_sent", "HTTPD finished sending");
-        close(fd);
-        sxe_httpd_response_copy_body_data(request, "Hello, world", 0);
-        sxe_httpd_response_add_body_buffer(request, &buffer3);
         sxe_httpd_response_end(request, handle_sent, NULL);
         is_eq(test_tap_ev_identifier_wait(TEST_WAIT, &ev), "handle_sent", "HTTPD finished request");
 
+        SXEL41("Expecting to read %u bytes", expected_length);
         test_ev_wait_read(TEST_WAIT, &ev, c, "client_read", readbuf, expected_length, "client");
         /* TODO: actually test that we got the correct contents of buf */
     }
 
     return exit_status();
 }
-
-#endif /* Unix */

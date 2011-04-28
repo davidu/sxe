@@ -33,9 +33,6 @@
 static tap_ev_queue q_client;
 static tap_ev_queue q_httpd;
 
-const char *cert = "../../lib-sxe/test/test-sxe-ssl.cert";
-const char *pkey = "../../lib-sxe/test/test-sxe-ssl.pkey";
-
 static void
 h_connect(struct SXE_HTTPD_REQUEST *request)
 {
@@ -146,31 +143,28 @@ client_read(SXE * this, int length)
 }
 
 static void
-client_sent(SXE * this, SXE_RETURN result)
+client_close(SXE * this)
 {
-    SXEE62I("%s(result=%s)", __func__, sxe_return_to_string(result));
-    tap_ev_queue_push(q_client, __func__, 2, "this", this, "result", result);
-    SXER60I("return");
+    SXEE62I("%s(this=%p)", __func__, this);
+    tap_ev_queue_push(q_client, __func__, 1, "this", this);
+    SXER60("return");
 }
 
 int
 main(void)
 {
-    SXE_RETURN               result;
     SXE_HTTPD                httpd;
     SXE_HTTPD_REQUEST      * request;
     tap_ev                   ev;
     SXE                    * listener;
     SXE                    * c;
+    SXE                    * c2;
     char                     buffer[1024];
 
-    tap_plan(30, TAP_FLAG_ON_FAILURE_EXIT, NULL);
+    tap_plan(20, TAP_FLAG_ON_FAILURE_EXIT, NULL);
     sxe_register(4, 0);        /* http listener and connections */
     sxe_register(8, 0);        /* http clients */
-    sxe_ssl_register(4);
-    sxe_ssl_register(8);
     sxe_init();
-    sxe_ssl_init(cert, pkey, cert, ".");
 
     q_client = tap_ev_queue_new();
     q_httpd = tap_ev_queue_new();
@@ -186,35 +180,15 @@ main(void)
     SXE_HTTPD_SET_HANDLER(&httpd, close,   h_close);
 
     listener = sxe_httpd_listen(&httpd, "0.0.0.0", 0);
-    sxe_ssl_enable(listener);
 
     c = sxe_new_tcp(NULL, "0.0.0.0", 0, client_connect, client_read, NULL);
-    sxe_ssl_enable(c);
     sxe_connect(c, "127.0.0.1", SXE_LOCAL_PORT(listener));
 
-    is_eq(test_tap_ev_queue_identifier_wait(q_client, TEST_WAIT, &ev), "client_connect",      "Client connected to HTTPD");
+    is_eq(test_tap_ev_queue_identifier_wait(q_client, TEST_WAIT, &ev), "client_connect",      "1st Client connected to HTTPD");
+    SXE_WRITE_LITERAL(c, "GET /this/is/a/URL HTTP/1.1\r\nContent-Length: 10\r\n\r\n12345678\r\n");
+
     is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_connect",            "HTTPD: connected");
-
-    result = SXE_SEND_LITERAL(c, "GET /this/is/a/URL HTTP/1.1\r\nConnection: whatever\r\nHost: interesting\r\nContent-Length: 10\r\n\r\n12345678\r\n", client_sent);
-    if (result == SXE_RETURN_OK) {
-        skip(1, "Client: sent immediately, don't need to wait");
-    }
-    else {
-        is_eq(test_tap_ev_queue_identifier_wait(q_client, TEST_WAIT, &ev), "client_sent",     "Client: sent request");
-    }
-
     is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_request",            "HTTPD: new request");
-    is_strncmp(tap_ev_arg(ev, "url"), "/this/is/a/URL", SXE_LITERAL_LENGTH("/this/is/a/URL"), "HTTPD: URL is correct");
-    is_strncmp(tap_ev_arg(ev, "method"), "GET", SXE_LITERAL_LENGTH("GET"),                    "HTTPD: method is 'GET'");
-    is_strncmp(tap_ev_arg(ev, "version"), "HTTP/1.1", SXE_LITERAL_LENGTH("HTTP/1.1"),         "HTTPD: version is 'HTTP/1.1'");
-
-    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_header",             "HTTPD: header event");
-    is_strncmp(tap_ev_arg(ev, "key"), "Connection", SXE_LITERAL_LENGTH("Connection"),         "HTTPD: header was 'Connect'");
-    is_strncmp(tap_ev_arg(ev, "value"), "whatever", SXE_LITERAL_LENGTH("whatever"),           "HTTPD: header value was 'whatever'");
-
-    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_header",             "HTTPD: header event");
-    is_strncmp(tap_ev_arg(ev, "key"), "Host", SXE_LITERAL_LENGTH("Host"),                     "HTTPD: header was 'Connect'");
-    is_strncmp(tap_ev_arg(ev, "value"), "interesting", SXE_LITERAL_LENGTH("interesting"),     "HTTPD: header value was 'whatever'");
 
     is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_header",             "HTTPD: header event");
     is_strncmp(tap_ev_arg(ev, "key"), "Content-Length", SXE_LITERAL_LENGTH("Content-Length"), "HTTPD: header was 'Connect'");
@@ -225,51 +199,40 @@ main(void)
     test_ev_queue_wait_read(q_httpd, TEST_WAIT, &ev, NULL, "h_body", buffer, 10, "HTTPD body handler");
     is_strncmp(buffer, "12345678\r\n", SXE_LITERAL_LENGTH("12345678\r\n"),                    "HTTPD: read correct body");
 
+    /* httpd is still in "req_response" state */
     is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_respond",            "HTTPD: respond event");
-    request = SXE_CAST_NOCONST(SXE_HTTPD_REQUEST *, tap_ev_arg(ev, "request"));
-    result = SXE_SEND_LITERAL(c, "GET ", client_sent);    /* Send the beginning of the next message           */
-    if (result == SXE_RETURN_OK) {
-        skip(1, "Client: sent immediately, don't need to wait");
-    }
-    else {
-        is_eq(test_tap_ev_queue_identifier_wait(q_client, TEST_WAIT, &ev), "client_sent",     "Client: sent request");
-    }
 
-    test_ev_loop_wait(TEST_WAIT);    /* Try to make sure it's received before responding */
-    sxe_httpd_response_simple(request, h_sent, NULL, 200, "OK", "abcd", NULL);
-    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_sent",               "HTTPD: finished responding");
+    /* Extra data from client, e.g., "content-length" is wrong and shorter than real packet */
+    SXE_WRITE_LITERAL(c, "AB");
 
-#define EXPECTED_RESPONSE "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabcd"
+    /* Send another valid request again, the connection is in "sink" mode now, data will get ignored */
+    SXE_WRITE_LITERAL(c, "GET /this/is/a/URL HTTP/1.1\r\nContent-Length: 10\r\n\r\n12345678\r\n");
+    test_process_all_libev_events();
 
-    test_ev_queue_wait_read(q_client, TEST_WAIT, &ev, c, "client_read", buffer, SXE_LITERAL_LENGTH(EXPECTED_RESPONSE), "client");
-    is_strncmp(buffer, EXPECTED_RESPONSE, SXE_LITERAL_LENGTH(EXPECTED_RESPONSE),              "Client received correct response");
+    /* In sink mode, no more httpd events */
+    is(tap_ev_queue_length(q_httpd), 0, "No lurking httpd events");
 
-    /* Now try it again, this time with only the respond handler hooked. */
-    SXE_HTTPD_SET_HANDLER(&httpd, request, NULL);
-    SXE_HTTPD_SET_HANDLER(&httpd, header, NULL);
-    SXE_HTTPD_SET_HANDLER(&httpd, eoh, NULL);
-    SXE_HTTPD_SET_HANDLER(&httpd, body, NULL);
+    /* New client connection should not be affected */
+    c2 = sxe_new_tcp(NULL, "0.0.0.0", 0, client_connect, client_read, client_close);
+    sxe_connect(c2, "127.0.0.1", SXE_LOCAL_PORT(listener));
 
-    /* Finish writing the next message
-     */
-    result = SXE_SEND_LITERAL(c, "/this/is/a/URL HTTP/1.1\r\nConnection: whatever\r\nHost: interesting\r\nContent-Length: 10\r\n\r\n12345678\r\n", client_sent);
-    if (result == SXE_RETURN_OK) {
-        skip(1, "Client: sent immediately, don't need to wait");
-    }
-    else {
-        is_eq(test_tap_ev_queue_identifier_wait(q_client, TEST_WAIT, &ev), "client_sent",     "Client: sent request");
-    }
+    is_eq(test_tap_ev_queue_identifier_wait(q_client, TEST_WAIT, &ev), "client_connect",      "2nd Client connected to HTTPD");
+    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_connect",            "HTTPD: connected");
 
+    SXE_WRITE_LITERAL(c2, "GET /simple HTTP/1.1\r\n\r\n");
+
+    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_request",            "HTTPD: new request");
+    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_eoh",                "HTTPD: eoh (end of headers) event");
     is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_respond",            "HTTPD: respond event");
-    request = SXE_CAST_NOCONST(SXE_HTTPD_REQUEST *, tap_ev_arg(ev, "request"));
-    sxe_httpd_response_copy_raw_data(request, EXPECTED_RESPONSE, SXE_LITERAL_LENGTH(EXPECTED_RESPONSE));
-    sxe_httpd_response_end(request, h_sent, NULL);
+    request = (SXE_HTTPD_REQUEST *)(long)tap_ev_arg(ev, "request");
+    sxe_httpd_response_simple(request, h_sent, NULL, 200, "OK", NULL, "Connection", "close", NULL);
     is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_sent",               "HTTPD: finished responding");
-    test_ev_queue_wait_read(q_client, TEST_WAIT, &ev, c, "client_read", buffer, SXE_LITERAL_LENGTH(EXPECTED_RESPONSE), "client");
-    is_strncmp(buffer, EXPECTED_RESPONSE, SXE_LITERAL_LENGTH(EXPECTED_RESPONSE),              "Client received correct response");
+    sxe_close(request->sxe);
 
-    sxe_close(c);
-    is_eq(test_tap_ev_queue_identifier_wait(q_httpd, TEST_WAIT, &ev), "h_close",              "HTTPD: close event");
+#define TEST_200_CLOSE_RESPONSE "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+    test_ev_queue_wait_read(q_client, TEST_WAIT, &ev, c2, "client_read", buffer, SXE_LITERAL_LENGTH(TEST_200_CLOSE_RESPONSE), "client");
+    is_strncmp(buffer, TEST_200_CLOSE_RESPONSE, SXE_LITERAL_LENGTH(TEST_200_CLOSE_RESPONSE),  "GET response is a 200 OK with close");
+    is_eq(test_tap_ev_queue_identifier_wait(q_client, TEST_WAIT, &ev), "client_close",        "Got a client close event");
 
     return exit_status();
 }

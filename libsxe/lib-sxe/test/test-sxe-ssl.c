@@ -154,7 +154,7 @@ main(int argc, char *argv[])
 
     plan_tests(59);
 
-    sxe_log_level = SXE_LOG_LEVEL_LIBRARY_TRACE;
+    sxe_log_set_level(SXE_LOG_LEVEL_LIBRARY_TRACE);
     sxe_register(6, 0);
     sxe_ssl_register(2);
     is(sxe_init(), SXE_RETURN_OK,                                                           "sxe_init succeeded");
