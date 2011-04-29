@@ -26,7 +26,6 @@
 #include "mock.h"
 #include "sxe.h"
 #include "sxe-log.h"
-#include "sxe-mmap.h"
 #include "sxe-socket.h"
 #include "sxe-test.h"
 #include "sxe-util.h"
@@ -212,14 +211,21 @@ main(int argc, char *argv[])
         tc_chat_from_server(client, server, "THANKS!", 7);
     }
 
-    /* client -> server: contents of compiled argv[0]. */
+    /* client -> server: contents of a compiled program. */
     {
-        SXE_MMAP self;
+        struct stat   sb;
+        char        * sendbuf;
+        int           fd = open(argv[0], O_RDONLY);
 
-        sxe_mmap_open(&self, argv[0]);
-        tc_chat_from_client(client, server, self.addr, self.size);
+        fstat(fd, &sb);
+        sendbuf = malloc(sb.st_size);
+        read(fd, sendbuf, sb.st_size);
+
+        tc_chat_from_client(client, server, sendbuf, sb.st_size);
         tc_chat_from_server(client, server, "THANKS!", 7);
-        sxe_mmap_close(&self);
+
+        close(fd);
+        free(sendbuf);
     }
 
     /* Close the client, and ensure the server gets a close event. Note that
