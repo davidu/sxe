@@ -102,9 +102,7 @@ tc_chat(const char *from, SXE * s_from, tap_ev_queue q_from, const char *sendbuf
 
     SXE_LIST_CONSTRUCT(&buflist, 0, SXE_BUFFER, node);
     for (i = 0; i < TEST_COPIES; i++) {
-        buffers[i].ptr  = sendbuf;
-        buffers[i].len  = buflen;
-        buffers[i].sent = 0;
+        sxe_buffer_construct_const(&buffers[i], sendbuf, buflen);
         sxe_list_push(&buflist, &buffers[i]);
     }
 
